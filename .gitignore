@@ -4,6 +4,7 @@ artifacts/processed/
 artifacts/models/
 artifacts/reports/
 artifacts/weights/
+artifacts/model/
 artifacts/model_checkpoint/
 MLOPS_PROJECT_2nd.egg-info
 __pycache__/
