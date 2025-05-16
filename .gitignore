@@ -1,0 +1,14 @@
+venv/
+artifacts/raw/
+artifacts/processed/ 
+artifacts/models/
+artifacts/reports/
+artifacts/weights/
+artifacts/model_checkpoint/
+MLOPS_PROJECT_2nd.egg-info
+__pycache__/
+*.pyc
+*.pyo
+*.DS_Store
+logs/   
+
