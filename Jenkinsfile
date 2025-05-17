@@ -4,7 +4,7 @@ pipeline {
     environment {
         VENV_DIR = "${WORKSPACE}/venv"
         GOOGLE_APPLICATION_CREDENTIALS = credentials('GCP-KEY')
-        PROJECT_ID = "mlops-2nd-project"
+        PROJECT_ID = "mlops-459315"
         IMAGE_NAME = "ml-recommendation-app"
         IMAGE_TAG = "${BUILD_NUMBER}"
         GCR_URL = "gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
