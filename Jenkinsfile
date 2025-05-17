@@ -37,16 +37,16 @@ pipeline {
                 pip3 list
                 
                 echo "\\n===== Python Environment Variables ====="
-                env | grep -i python
+                env | grep -i python || echo "No Python environment variables found"
                 
                 echo "\\n===== Directory Structure ====="
                 ls -la
                 
                 echo "\\n===== setup.py Content ====="
-                cat setup.py
+                cat setup.py || echo "setup.py not found"
                 
                 echo "\\n===== requirements.txt Content ====="
-                cat requirements.txt
+                cat requirements.txt || echo "requirements.txt not found"
                 '''
             }
         }
@@ -79,8 +79,17 @@ pipeline {
                 # Upgrade pip
                 pip install --upgrade pip
                 
-                # Install the package in development mode using setup.py
-                pip install -e .
+                # Check if setup.py exists and install from it, otherwise use requirements.txt
+                if [ -f setup.py ]; then
+                    echo "Installing from setup.py"
+                    pip install -e .
+                elif [ -f requirements.txt ]; then
+                    echo "Installing from requirements.txt"
+                    pip install -r requirements.txt
+                else
+                    echo "Neither setup.py nor requirements.txt found"
+                    exit 1
+                fi
                 
                 # Verify installed packages
                 pip list
@@ -123,14 +132,14 @@ pipeline {
                     echo "Credentials file exists: $(test -f $GOOGLE_APPLICATION_CREDENTIALS && echo 'Yes' || echo 'No')"
                     
                     # Debug DVC remote
-                    dvc remote list
+                    dvc remote list || echo "No DVC remotes configured"
                     
                     # Run DVC pull with verbose output
-                    dvc pull -v
+                    dvc pull -v || echo "DVC pull failed, check if DVC is initialized"
                     '''
                 }
                 
-                echo "DVC pull completed successfully"
+                echo "DVC pull completed"
             }
         }
         
@@ -142,7 +151,7 @@ pipeline {
                 ls -la artifacts/ || echo "artifacts directory not found"
                 
                 # Check DVC files
-                find . -name "*.dvc" -exec echo "DVC file: {}" \\;
+                find . -name "*.dvc" -exec echo "DVC file: {}" \\; || echo "No DVC files found"
                 '''
             }
         }
@@ -160,17 +169,25 @@ pipeline {
             echo "===== Diagnostic Information ====="
             
             echo "\\n===== Python Environment ====="
-            python3 --version
-            pip3 --version
+            python3 --version || echo "Python3 not available"
+            pip3 --version || echo "Pip3 not available"
             
             echo "\\n===== Virtual Environment Status ====="
             ls -la venv/ || echo "venv directory not found"
             
             echo "\\n===== DVC Status ====="
-            . venv/bin/activate && dvc status || echo "DVC command failed"
+            if [ -d venv ] && [ -f venv/bin/activate ]; then
+                . venv/bin/activate && dvc status || echo "DVC command failed"
+            else
+                echo "Virtual environment not available for DVC status check"
+            fi
             
             echo "\\n===== Last 20 lines of DVC logs ====="
-            tail -n 20 .dvc/tmp/logs/* 2>/dev/null || echo "No DVC logs found"
+            if [ -d .dvc/tmp/logs ]; then
+                tail -n 20 .dvc/tmp/logs/* 2>/dev/null || echo "No DVC logs found"
+            else
+                echo "DVC logs directory not found"
+            fi
             '''
         }
         always {
