@@ -1,6 +1,10 @@
 pipeline {
     agent any
     
+    environment {
+        VENV_DIR = "${WORKSPACE}/venv"
+    }
+    
     stages {
         stage('Checkout') {
             steps {
@@ -36,9 +40,6 @@ pipeline {
                 echo "\\n===== Available Python Packages ====="
                 pip3 list
                 
-                echo "\\n===== Python Environment Variables ====="
-                env | grep -i python || echo "No Python environment variables found"
-                
                 echo "\\n===== Directory Structure ====="
                 ls -la
                 
@@ -51,70 +52,27 @@ pipeline {
             }
         }
         
-        stage('Create Virtual Environment') {
+        stage("Making a virtual environment....") {
             steps {
-                sh '''
-                echo "===== Creating Virtual Environment ====="
-                # Remove any existing venv directory
-                rm -rf venv || true
-                
-                # Create a new virtual environment
-                python3 -m venv venv
-                
-                # Verify venv creation
-                ls -la venv/
-                '''
-                
-                echo "Virtual environment created"
-            }
-        }
-        
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                echo "===== Installing Dependencies ====="
-                # Activate the virtual environment
-                . venv/bin/activate
-                
-                # Upgrade pip
-                pip install --upgrade pip
-                
-                # Check if setup.py exists and install from it, otherwise use requirements.txt
-                if [ -f setup.py ]; then
-                    echo "Installing from setup.py"
+                script {
+                    echo 'Making a virtual environment...'
+                    sh '''
+                    # First, make sure python3-venv is installed
+                    apt-get update && apt-get install -y python3-venv || echo "Could not install python3-venv, trying to continue anyway"
+                    
+                    # Remove any existing venv
+                    rm -rf ${VENV_DIR} || true
+                    
+                    # Create virtual environment
+                    python3 -m venv ${VENV_DIR} || python -m venv ${VENV_DIR}
+                    
+                    # Activate and install dependencies
+                    . ${VENV_DIR}/bin/activate
+                    pip install --upgrade pip
                     pip install -e .
-                elif [ -f requirements.txt ]; then
-                    echo "Installing from requirements.txt"
-                    pip install -r requirements.txt
-                else
-                    echo "Neither setup.py nor requirements.txt found"
-                    exit 1
-                fi
-                
-                # Verify installed packages
-                pip list
-                '''
-                
-                echo "Dependencies installed successfully"
-            }
-        }
-        
-        stage('DVC Setup') {
-            steps {
-                sh '''
-                echo "===== Setting up DVC ====="
-                # Activate the virtual environment
-                . venv/bin/activate
-                
-                # Install DVC with Google Cloud support
-                pip install dvc dvc[gs]
-                
-                # Verify DVC installation
-                dvc --version
-                
-                # Check DVC configuration
-                cat .dvc/config || echo "DVC config not found"
-                '''
+                    pip install dvc dvc[gs]
+                    '''
+                }
             }
         }
         
@@ -125,7 +83,7 @@ pipeline {
                     sh '''
                     echo "===== Running DVC Pull ====="
                     # Activate the virtual environment
-                    . venv/bin/activate
+                    . ${VENV_DIR}/bin/activate
                     
                     # Set the Google credentials
                     export GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS
@@ -152,6 +110,10 @@ pipeline {
                 
                 # Check DVC files
                 find . -name "*.dvc" -exec echo "DVC file: {}" \\; || echo "No DVC files found"
+                
+                # Activate the virtual environment and check DVC status
+                . ${VENV_DIR}/bin/activate
+                dvc status || echo "DVC status check failed"
                 '''
             }
         }
@@ -173,11 +135,11 @@ pipeline {
             pip3 --version || echo "Pip3 not available"
             
             echo "\\n===== Virtual Environment Status ====="
-            ls -la venv/ || echo "venv directory not found"
+            ls -la ${VENV_DIR}/ || echo "venv directory not found"
             
             echo "\\n===== DVC Status ====="
-            if [ -d venv ] && [ -f venv/bin/activate ]; then
-                . venv/bin/activate && dvc status || echo "DVC command failed"
+            if [ -d ${VENV_DIR} ] && [ -f ${VENV_DIR}/bin/activate ]; then
+                . ${VENV_DIR}/bin/activate && dvc status || echo "DVC command failed"
             else
                 echo "Virtual environment not available for DVC status check"
             fi
@@ -192,7 +154,7 @@ pipeline {
         }
         always {
             // Clean up virtual environment (optional)
-            sh 'rm -rf venv || true'
+            sh 'rm -rf ${VENV_DIR} || true'
         }
     }
 }
