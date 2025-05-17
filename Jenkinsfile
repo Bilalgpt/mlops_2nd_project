@@ -4,7 +4,7 @@ pipeline {
     environment {
         VENV_DIR = "${WORKSPACE}/venv"
         GOOGLE_APPLICATION_CREDENTIALS = credentials('GCP-KEY')
-        PROJECT_ID = "mlops-2nd-project" // Adjust this to match your actual GCP project ID
+        PROJECT_ID = "mlops-2nd-project"
         IMAGE_NAME = "ml-recommendation-app"
         IMAGE_TAG = "${BUILD_NUMBER}"
         GCR_URL = "gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
@@ -93,15 +93,31 @@ pipeline {
             }
         }
         
+        stage('Fix Docker Permissions') {
+            steps {
+                sh '''
+                echo "===== Fixing Docker Socket Permissions ====="
+                # This will ensure the Docker socket is readable by the jenkins user
+                # Note: This requires that the Jenkins container is run with privileged mode
+                ls -la /var/run/docker.sock || echo "Docker socket not found at expected location"
+                
+                # Try running a basic Docker command to check if permissions are already correct
+                docker version || (echo "Attempting to fix Docker socket permissions" && \
+                    (chown root:root /var/run/docker.sock || echo "Failed to change ownership") && \
+                    (chmod 666 /var/run/docker.sock || echo "Failed to change permissions"))
+                '''
+            }
+        }
+        
         stage('Build Docker Image') {
             steps {
                 sh '''
                 echo "===== Building Docker Image ====="
-                # Build the Docker image using sudo
-                sudo docker build -t ${GCR_URL} .
+                # Build the Docker image (without sudo)
+                docker build -t ${GCR_URL} .
                 
                 # List images to verify build
-                sudo docker images | grep ${IMAGE_NAME}
+                docker images | grep ${IMAGE_NAME}
                 '''
             }
         }
@@ -110,8 +126,8 @@ pipeline {
             steps {
                 sh '''
                 echo "===== Pushing Image to Google Container Registry ====="
-                # Push the Docker image to GCR using sudo
-                sudo docker push ${GCR_URL}
+                # Push the Docker image to GCR (without sudo)
+                docker push ${GCR_URL}
                 
                 echo "Image successfully pushed to: ${GCR_URL}"
                 '''
@@ -133,7 +149,7 @@ pipeline {
             // Clean up Docker images to save space
             sh '''
             echo "Cleaning up Docker images..."
-            sudo docker rmi ${GCR_URL} || true
+            docker rmi ${GCR_URL} || true
             '''
         }
     }
