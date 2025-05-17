@@ -3,6 +3,7 @@ pipeline {
     
     environment {
         VENV_DIR = "${WORKSPACE}/venv"
+        GOOGLE_APPLICATION_CREDENTIALS = credentials('GCP-KEY')
     }
     
     stages {
@@ -45,6 +46,29 @@ pipeline {
                 
                 # List installed packages for verification
                 pip list
+                '''
+            }
+        }
+        
+        stage('DVC Pull') {
+            steps {
+                sh '''
+                echo "===== Pulling data with DVC ====="
+                # Activate virtual environment
+                . ${VENV_DIR}/bin/activate
+                
+                # Configure GCP authentication
+                echo "Setting up GCP authentication"
+                
+                # Initialize DVC if needed
+                dvc status || dvc init
+                
+                # Pull data from remote storage
+                echo "Pulling data artifacts from remote storage"
+                dvc pull -v
+                
+                # Show DVC status for verification
+                dvc status
                 '''
             }
         }
