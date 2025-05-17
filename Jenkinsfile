@@ -21,16 +21,12 @@ pipeline {
         
         stage('Create Virtual Environment') {
             steps {
+                // Use python3 directly to create a virtual environment
                 sh '''
-                python -m pip install --upgrade pip
-                python -m pip install virtualenv
-                python -m virtualenv venv
-                '''
-                
-                // Activate virtual environment and install requirements
-                sh '''
+                python3 -m venv venv
                 . venv/bin/activate
-                pip install -r requirements.txt
+                python -m pip install --upgrade pip
+                python -m pip install -r requirements.txt
                 '''
                 
                 echo "Virtual environment created and dependencies installed"
@@ -43,7 +39,7 @@ pipeline {
                 withCredentials([file(credentialsId: 'GCP-KEY', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     sh '''
                     . venv/bin/activate
-                    pip install dvc dvc[gs]
+                    python -m pip install dvc dvc[gs]
                     export GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS
                     dvc pull
                     '''
