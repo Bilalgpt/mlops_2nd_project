@@ -97,11 +97,11 @@ pipeline {
             steps {
                 sh '''
                 echo "===== Building Docker Image ====="
-                # Build the Docker image
-                docker build -t ${GCR_URL} .
+                # Build the Docker image using sudo
+                sudo docker build -t ${GCR_URL} .
                 
                 # List images to verify build
-                docker images | grep ${IMAGE_NAME}
+                sudo docker images | grep ${IMAGE_NAME}
                 '''
             }
         }
@@ -110,8 +110,8 @@ pipeline {
             steps {
                 sh '''
                 echo "===== Pushing Image to Google Container Registry ====="
-                # Push the Docker image to GCR
-                docker push ${GCR_URL}
+                # Push the Docker image to GCR using sudo
+                sudo docker push ${GCR_URL}
                 
                 echo "Image successfully pushed to: ${GCR_URL}"
                 '''
@@ -133,7 +133,7 @@ pipeline {
             // Clean up Docker images to save space
             sh '''
             echo "Cleaning up Docker images..."
-            docker rmi ${GCR_URL} || true
+            sudo docker rmi ${GCR_URL} || true
             '''
         }
     }
