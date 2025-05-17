@@ -21,12 +21,18 @@ pipeline {
         
         stage('Create Virtual Environment') {
             steps {
-                // Use python3 directly to create a virtual environment
+                // Create and activate virtual environment
                 sh '''
+                # Remove any existing venv directory
+                rm -rf venv || true
+                
+                # Create a new virtual environment
                 python3 -m venv venv
+                
+                # Activate the virtual environment and install dependencies
                 . venv/bin/activate
-                python -m pip install --upgrade pip
-                python -m pip install -r requirements.txt
+                pip install --upgrade pip
+                pip install -r requirements.txt
                 '''
                 
                 echo "Virtual environment created and dependencies installed"
@@ -38,8 +44,13 @@ pipeline {
                 // Use the GCP-KEY credential for DVC authentication
                 withCredentials([file(credentialsId: 'GCP-KEY', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     sh '''
+                    # Activate the virtual environment
                     . venv/bin/activate
-                    python -m pip install dvc dvc[gs]
+                    
+                    # Install DVC with Google Cloud support
+                    pip install dvc dvc[gs]
+                    
+                    # Set the Google credentials and run DVC pull
                     export GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS
                     dvc pull
                     '''
@@ -58,8 +69,8 @@ pipeline {
             echo "Pipeline execution failed!"
         }
         always {
-            // Clean up virtual environment
-            sh 'rm -rf venv'
+            // Clean up virtual environment (optional - you can keep it for faster subsequent builds)
+            sh 'rm -rf venv || true'
         }
     }
 }
