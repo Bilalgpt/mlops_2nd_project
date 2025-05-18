@@ -11,6 +11,7 @@ pipeline {
         CLUSTER_NAME = "ml-ops-2nd-project-cluster-1"
         CLUSTER_REGION = "us-central1"
         PATH = "${env.WORKSPACE}/bin:${env.PATH}"
+        USE_GKE_GCLOUD_AUTH_PLUGIN = "True"
     }
     
     stages {
@@ -125,24 +126,30 @@ pipeline {
             steps {
                 sh '''
                 echo "===== Deploying to Kubernetes ====="
-                # Create local bin directory and install kubectl
+                # Create local bin directory if needed for kubectl
                 mkdir -p ${WORKSPACE}/bin
                 
-                if ! command -v ${WORKSPACE}/bin/kubectl &> /dev/null; then
+                # Install kubectl if needed
+                if ! command -v kubectl &> /dev/null; then
                     echo "Installing kubectl..."
                     curl -LO "https://dl.k8s.io/release/stable.txt"
                     curl -LO "https://dl.k8s.io/$(cat stable.txt)/bin/linux/amd64/kubectl"
                     chmod +x kubectl
                     mv kubectl ${WORKSPACE}/bin/
+                    export PATH=${WORKSPACE}/bin:$PATH
                 fi
                 
                 # Set environment variables for kubectl
                 export USE_GKE_GCLOUD_AUTH_PLUGIN=True
                 
+                # Verify gke-gcloud-auth-plugin is available
+                echo "Verifying GKE auth plugin installation:"
+                which gke-gcloud-auth-plugin || echo "GKE auth plugin not found in PATH"
+                
                 # Get GKE cluster credentials
                 gcloud container clusters get-credentials ${CLUSTER_NAME} --region ${CLUSTER_REGION} --project ${PROJECT_ID}
                 
-                # Update the image in deployment.yaml with sed
+                # Update the image in deployment.yaml with new tag
                 echo "Updating deployment.yaml with new image: ${GCR_URL}"
                 sed -i "s|gcr.io/${PROJECT_ID}/${IMAGE_NAME}:[0-9]*|${GCR_URL}|g" deployment.yaml
                 
@@ -151,19 +158,19 @@ pipeline {
                 cat deployment.yaml
                 
                 # Apply the deployment
-                ${WORKSPACE}/bin/kubectl apply -f deployment.yaml --validate=false
+                kubectl apply -f deployment.yaml
                 
                 # Wait for deployment to roll out
-                ${WORKSPACE}/bin/kubectl rollout status deployment/ml-recommendation-app --timeout=300s || true
+                kubectl rollout status deployment/ml-recommendation-app --timeout=300s
                 
                 # Get service information
                 echo "===== Service Details ====="
-                ${WORKSPACE}/bin/kubectl get service ml-recommendation-service || true
+                kubectl get service ml-recommendation-service
                 
                 # Wait for external IP
                 echo "Waiting for external IP..."
                 for i in {1..5}; do
-                    EXTERNAL_IP=$(${WORKSPACE}/bin/kubectl get service ml-recommendation-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+                    EXTERNAL_IP=$(kubectl get service ml-recommendation-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                     if [ -n "$EXTERNAL_IP" ]; then
                         echo "Application is deployed and available at: http://$EXTERNAL_IP"
                         break
