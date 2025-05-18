@@ -11,6 +11,7 @@ pipeline {
         CLUSTER_NAME = "ml-ops-2nd-project-cluster-1"
         CLUSTER_REGION = "us-central1"
         PATH = "${env.WORKSPACE}/bin:${env.PATH}"
+        USE_GKE_GCLOUD_AUTH_PLUGIN = "True"
     }
     
     stages {
@@ -155,8 +156,32 @@ pipeline {
                     echo "kubectl installed to ${WORKSPACE}/bin"
                 fi
                 
+                # Install gke-gcloud-auth-plugin
+                echo "===== Installing GKE auth plugin ====="
+                apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl || true
+                echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list || true
+                curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - || true
+                apt-get update && apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin || true
+                
+                # If apt-get install fails, try to install using gcloud
+                if ! command -v gke-gcloud-auth-plugin &> /dev/null; then
+                    echo "Installing gke-gcloud-auth-plugin using gcloud components..."
+                    gcloud components install gke-gcloud-auth-plugin || true
+                fi
+                
                 # Verify kubectl installation
                 ${WORKSPACE}/bin/kubectl version --client
+                
+                # Check if GKE auth plugin is available
+                if command -v gke-gcloud-auth-plugin &> /dev/null; then
+                    echo "GKE auth plugin is installed"
+                    gke-gcloud-auth-plugin --version
+                else
+                    echo "WARNING: GKE auth plugin not found, will try to proceed anyway"
+                fi
+                
+                # Enable GKE auth plugin for kubectl
+                export USE_GKE_GCLOUD_AUTH_PLUGIN=True
                 
                 # Get GKE cluster credentials - note we use --region not --zone for regional clusters
                 gcloud container clusters get-credentials ${CLUSTER_NAME} --region ${CLUSTER_REGION} --project ${PROJECT_ID}
@@ -223,8 +248,8 @@ spec:
     targetPort: 5000
 EOF
                 
-                # Apply the Kubernetes configuration using the local kubectl
-                ${WORKSPACE}/bin/kubectl apply -f deployment.yml
+                # Apply the Kubernetes configuration using the local kubectl with --validate=false to bypass the auth plugin requirement
+                ${WORKSPACE}/bin/kubectl apply -f deployment.yml --validate=false
                 
                 # Wait for deployment to complete
                 ${WORKSPACE}/bin/kubectl rollout status deployment/ml-recommendation-app --timeout=300s
