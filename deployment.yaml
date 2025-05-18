@@ -1,31 +1,55 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ml-app
+  name: ml-recommendation-app
+  labels:
+    app: ml-recommendation-app
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: ml-app
+      app: ml-recommendation-app
   template:
     metadata:
       labels:
-        app: ml-app
+        app: ml-recommendation-app
     spec:
       containers:
-      - name: ml-app-container
-        image: gcr.io/mlops-new-447207/ml-project:latest
+      - name: ml-recommendation-app
+        image: gcr.io/mlops-459315/ml-recommendation-app:11
+        imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 5000  # Replace with the port your app listens on
+        - containerPort: 5000
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 5000
+          initialDelaySeconds: 15
+          periodSeconds: 20
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: ml-app-service
+  name: ml-recommendation-service
+  labels:
+    app: ml-recommendation-app
 spec:
   type: LoadBalancer
   selector:
-    app: ml-app
+    app: ml-recommendation-app
   ports:
   - protocol: TCP
     port: 80
