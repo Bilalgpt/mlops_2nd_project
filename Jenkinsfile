@@ -8,8 +8,9 @@ pipeline {
         IMAGE_NAME = "ml-recommendation-app"
         IMAGE_TAG = "${BUILD_NUMBER}"
         GCR_URL = "gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
-        CLUSTER_NAME = "ml-ops-2nd-project-cluster-1" // Your actual cluster name
-        CLUSTER_REGION = "us-central1" // Your cluster is regional, not zonal
+        CLUSTER_NAME = "ml-ops-2nd-project-cluster-1"
+        CLUSTER_REGION = "us-central1"
+        PATH = "${env.WORKSPACE}/bin:${env.PATH}"
     }
     
     stages {
@@ -140,14 +141,22 @@ pipeline {
             steps {
                 sh '''
                 echo "===== Deploying to Kubernetes ====="
-                # Install kubectl if needed
+                # Create local bin directory
+                mkdir -p ${WORKSPACE}/bin
+                
+                # Install kubectl if needed to workspace bin directory
                 if ! command -v kubectl &> /dev/null; then
                     echo "Installing kubectl..."
                     curl -LO "https://dl.k8s.io/release/stable.txt"
                     curl -LO "https://dl.k8s.io/$(cat stable.txt)/bin/linux/amd64/kubectl"
                     chmod +x kubectl
-                    mv kubectl /usr/local/bin/
+                    mv kubectl ${WORKSPACE}/bin/
+                    export PATH=${WORKSPACE}/bin:$PATH
+                    echo "kubectl installed to ${WORKSPACE}/bin"
                 fi
+                
+                # Verify kubectl installation
+                ${WORKSPACE}/bin/kubectl version --client
                 
                 # Get GKE cluster credentials - note we use --region not --zone for regional clusters
                 gcloud container clusters get-credentials ${CLUSTER_NAME} --region ${CLUSTER_REGION} --project ${PROJECT_ID}
@@ -214,20 +223,20 @@ spec:
     targetPort: 5000
 EOF
                 
-                # Apply the Kubernetes configuration
-                kubectl apply -f deployment.yml
+                # Apply the Kubernetes configuration using the local kubectl
+                ${WORKSPACE}/bin/kubectl apply -f deployment.yml
                 
                 # Wait for deployment to complete
-                kubectl rollout status deployment/ml-recommendation-app --timeout=300s
+                ${WORKSPACE}/bin/kubectl rollout status deployment/ml-recommendation-app --timeout=300s
                 
-                # Get service details and external IP
+                # Get service details
                 echo "===== Service Details ====="
-                kubectl get service ml-recommendation-service
+                ${WORKSPACE}/bin/kubectl get service ml-recommendation-service
                 
-                # Wait for external IP (may take a minute or two)
+                # Wait for external IP
                 echo "Waiting for external IP..."
                 for i in {1..10}; do
-                    EXTERNAL_IP=$(kubectl get service ml-recommendation-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                    EXTERNAL_IP=$(${WORKSPACE}/bin/kubectl get service ml-recommendation-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
                     if [ -n "$EXTERNAL_IP" ]; then
                         echo "Application is deployed and available at: http://$EXTERNAL_IP"
                         break
