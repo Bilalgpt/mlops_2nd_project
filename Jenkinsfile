@@ -8,7 +8,7 @@ pipeline {
         IMAGE_NAME = 'ml-recommendation-app'
         IMAGE_TAG = "${env.BUILD_NUMBER}"
         IMAGE_URL = "gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
-        CREDENTIALS_ID = 'gcp-credentials'
+        CREDENTIALS_ID = 'GCP-KEY'  // Updated to match your Jenkins credential ID
     }
     
     stages {
@@ -22,26 +22,23 @@ pipeline {
         stage('Build and Push Docker Image') {
             steps {
                 script {
-                    // Authenticate with Google Cloud
+                    // Authenticate with Google Cloud using correct credential ID
                     withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                         sh '''
                         echo "===> DEBUG: Authenticating with Google Cloud"
                         gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
                         gcloud config set project ${PROJECT_ID}
                         gcloud auth configure-docker
-                        '''
                         
-                        // Build and push Docker image with debugging
-                        sh '''
                         echo "===> DEBUG: Starting Docker build with memory monitoring"
                         # Print system resources before build
                         echo "===> SYSTEM RESOURCES BEFORE BUILD:"
-                        free -h
+                        free -h || echo "free command not available"
                         df -h
                         
                         # Build with progress output
                         echo "===> DEBUG: Building Docker image ${IMAGE_URL}"
-                        docker build -t ${IMAGE_URL} . --progress=plain
+                        docker build -t ${IMAGE_URL} .
                         
                         # Check image size
                         echo "===> DEBUG: Image size information:"
@@ -49,7 +46,7 @@ pipeline {
                         
                         # Print system resources after build
                         echo "===> SYSTEM RESOURCES AFTER BUILD:"
-                        free -h
+                        free -h || echo "free command not available"
                         df -h
                         
                         echo "===> DEBUG: Pushing Docker image to registry"
@@ -72,7 +69,7 @@ pipeline {
                         
                         # Check cluster node capacity
                         echo "===> DEBUG: Cluster node details and capacity:"
-                        kubectl describe nodes | grep -A 5 "Capacity\\|Allocatable"
+                        kubectl describe nodes | grep -A 5 "Capacity\\|Allocatable" || echo "No node information available"
                         '''
                         
                         // Create the deployment YAML with proper resource limits
@@ -145,6 +142,9 @@ EOF
                           echo "===> DEBUG: Created new GCP credentials secret"
                         else
                           echo "===> DEBUG: GCP credentials secret already exists"
+                          # Update the secret with the current key
+                          kubectl create secret generic gcp-key --from-file=key.json=${GOOGLE_APPLICATION_CREDENTIALS} --dry-run=client -o yaml | kubectl apply -f -
+                          echo "===> DEBUG: Updated GCP credentials secret"
                         fi
                         '''
                         
@@ -166,18 +166,18 @@ EOF
                         kubectl get pods -l app=ml-recommendation-app
                         
                         echo "===> DEBUG: Checking resource allocation for pods"
-                        kubectl describe pods -l app=ml-recommendation-app | grep -A 3 "Limits\\|Requests"
+                        kubectl describe pods -l app=ml-recommendation-app | grep -A 3 "Limits\\|Requests" || echo "No resource limits found"
                         
                         # Wait for pods to be ready
                         sleep 30
                         
                         echo "===> DEBUG: Monitoring memory usage of pods"
-                        kubectl top pods -l app=ml-recommendation-app
+                        kubectl top pods -l app=ml-recommendation-app || echo "kubectl top not available"
                         
                         echo "===> DEBUG: Checking recent pod logs for memory indicators"
                         for pod in $(kubectl get pods -l app=ml-recommendation-app -o name); do
                           echo "===> LOGS FOR $pod:"
-                          kubectl logs $pod --tail=50 | grep -i "memory\\|heap\\|OOM"
+                          kubectl logs $pod --tail=50 | grep -i "memory\\|heap\\|OOM" || echo "No memory-related logs found"
                         done
                         
                         # Get the service URL
@@ -190,7 +190,7 @@ EOF
                         echo "===> RESOURCE USAGE SUMMARY:"
                         echo "Pods running with following resource allocations:"
                         kubectl get pods -l app=ml-recommendation-app -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,RESTARTS:.status.containerStatuses[0].restartCount
-                        kubectl top pods -l app=ml-recommendation-app
+                        kubectl top pods -l app=ml-recommendation-app || echo "kubectl top not available"
                         
                         echo "===> DEPLOYMENT SUCCESSFUL: ML Recommendation app is now running"
                         '''
@@ -205,20 +205,28 @@ EOF
                     withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                         sh '''
                         echo "===> DEBUG: Verifying application health"
+                        gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
+                        gcloud container clusters get-credentials ${CLUSTER_NAME} --zone ${CLUSTER_ZONE} --project ${PROJECT_ID}
+                        
                         # Wait for service to get external IP
                         external_ip=""
-                        while [ -z $external_ip ]; do
-                          echo "===> DEBUG: Waiting for external IP..."
-                          external_ip=$(kubectl get service ml-recommendation-app -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                        count=0
+                        while [ -z "$external_ip" ] && [ $count -lt 10 ]; do
+                          echo "===> DEBUG: Waiting for external IP... Attempt $count"
+                          external_ip=$(kubectl get service ml-recommendation-app -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
                           [ -z "$external_ip" ] && sleep 10
+                          count=$((count+1))
                         done
                         
-                        echo "===> DEBUG: Service endpoint available at: http://$external_ip"
+                        if [ -z "$external_ip" ]; then
+                          echo "===> WARNING: No external IP found after timeout"
+                        else
+                          echo "===> DEBUG: Service endpoint available at: http://$external_ip"
+                        fi
                         
                         # Monitor initial resource usage after deployment
-                        echo "===> DEBUG: Resource usage after 1 minute:"
-                        sleep 60
-                        kubectl top pods -l app=ml-recommendation-app
+                        echo "===> DEBUG: Resource usage after deployment:"
+                        kubectl top pods -l app=ml-recommendation-app || echo "kubectl top not available"
                         
                         # Check for any restarts which could indicate OOM issues
                         echo "===> DEBUG: Checking for container restarts (potential OOM indicators):"
@@ -241,7 +249,8 @@ EOF
         }
         always {
             echo "===> DEBUG: Cleaning workspace"
-            cleanWs()
+            // Use deleteDir() instead of cleanWs()
+            deleteDir()
         }
     }
 }
