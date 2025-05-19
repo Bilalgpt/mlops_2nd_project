@@ -82,20 +82,11 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     sh '''
-                    # First, enable the required API - we need to fix this error
-                    gcloud services enable cloudresourcemanager.googleapis.com --quiet
-                    
-                    # Add a sleep to ensure the API activation propagates
-                    sleep 30
-                    
-                    # Then authenticate and set project
                     gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
                     gcloud config set project ${PROJECT_ID}
+                    gcloud container clusters get-credentials ${CLUSTER_NAME} --region ${LOCATION} --project ${PROJECT_ID}
                     
-                    # Configure kubectl to use the GKE cluster with increased timeout
-                    gcloud container clusters get-credentials ${CLUSTER_NAME} --location ${LOCATION} --project ${PROJECT_ID} --quiet
-                    
-                    # Create deployment file
+                    # Create deployment manifest
                     cat <<EOF > deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -136,32 +127,21 @@ spec:
     targetPort: 5000
   type: LoadBalancer
 EOF
-                    
-                    # Apply the deployment (with retry logic)
-                    for i in 1 2 3 4 5; do
-                        if kubectl apply -f deployment.yaml; then
-                            echo "Deployment applied successfully"
-                            break
-                        else
-                            echo "Attempt $i failed, retrying in 10 seconds..."
-                            sleep 10
-                        fi
-                        
-                        if [ $i -eq 5 ]; then
-                            echo "Failed to deploy after 5 attempts"
-                            exit 1
-                        fi
+
+                    # Try deploying with retries
+                    MAX_ATTEMPTS=5
+                    for i in $(seq 1 $MAX_ATTEMPTS); do
+                      kubectl apply -f deployment.yaml && break
+                      echo "Attempt $i failed, retrying in 10 seconds..."
+                      sleep 10
+                      [ $i -eq $MAX_ATTEMPTS ] && echo "Failed to deploy after $MAX_ATTEMPTS attempts" && exit 1
                     done
                     
-                    # Wait for deployment to be rolled out (with timeout)
-                    kubectl rollout status deployment/ml-recommendation-app --timeout=120s || true
-                    
-                    # Get the service URL
-                    echo "Application deployed. Service available at:"
-                    kubectl get service ml-recommendation-app || true
+                    # Display service information
+                    kubectl get service ml-recommendation-app
                     '''
                 }
-                echo "Application deployed to Kubernetes successfully."
+                echo "Deployed to Kubernetes successfully."
             }
         }
     }
@@ -175,7 +155,6 @@ EOF
         }
         always {
             echo "Cleaning up workspace..."
-            // Using deleteDir() instead of cleanWs()
             deleteDir()
         }
     }
