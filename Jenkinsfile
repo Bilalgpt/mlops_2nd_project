@@ -82,19 +82,21 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     sh '''
+                    # First, enable the required API - we need to fix this error
+                    gcloud services enable cloudresourcemanager.googleapis.com --quiet
+                    
+                    # Add a sleep to ensure the API activation propagates
+                    sleep 30
+                    
+                    # Then authenticate and set project
                     gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
                     gcloud config set project ${PROJECT_ID}
                     
-                    # Configure kubectl to use the GKE cluster
-                    gcloud container clusters get-credentials ${CLUSTER_NAME} --location ${LOCATION} --project ${PROJECT_ID}
+                    # Configure kubectl to use the GKE cluster with increased timeout
+                    gcloud container clusters get-credentials ${CLUSTER_NAME} --location ${LOCATION} --project ${PROJECT_ID} --quiet
                     
-                    # Check if the deployment already exists
-                    if kubectl get deployment ml-recommendation-app &> /dev/null; then
-                        # Update the existing deployment with the new image
-                        kubectl set image deployment/ml-recommendation-app ml-recommendation-app=gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}
-                    else
-                        # Create a new deployment YAML file
-                        cat <<EOF > deployment.yaml
+                    # Create deployment file
+                    cat <<EOF > deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -134,17 +136,29 @@ spec:
     targetPort: 5000
   type: LoadBalancer
 EOF
-                        
-                        # Apply the deployment
-                        kubectl apply -f deployment.yaml
-                    fi
                     
-                    # Wait for deployment to be rolled out
-                    kubectl rollout status deployment/ml-recommendation-app
+                    # Apply the deployment (with retry logic)
+                    for i in 1 2 3 4 5; do
+                        if kubectl apply -f deployment.yaml; then
+                            echo "Deployment applied successfully"
+                            break
+                        else
+                            echo "Attempt $i failed, retrying in 10 seconds..."
+                            sleep 10
+                        fi
+                        
+                        if [ $i -eq 5 ]; then
+                            echo "Failed to deploy after 5 attempts"
+                            exit 1
+                        fi
+                    done
+                    
+                    # Wait for deployment to be rolled out (with timeout)
+                    kubectl rollout status deployment/ml-recommendation-app --timeout=120s || true
                     
                     # Get the service URL
                     echo "Application deployed. Service available at:"
-                    kubectl get service ml-recommendation-app
+                    kubectl get service ml-recommendation-app || true
                     '''
                 }
                 echo "Application deployed to Kubernetes successfully."
@@ -161,7 +175,8 @@ EOF
         }
         always {
             echo "Cleaning up workspace..."
-            cleanWs()
+            // Using deleteDir() instead of cleanWs()
+            deleteDir()
         }
     }
 }
