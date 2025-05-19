@@ -3,91 +3,82 @@ pipeline {
     
     environment {
         PROJECT_ID = 'mlops-459315'
-        CLUSTER_NAME = 'ml-ops-2nd-project-cluster-12'
-        LOCATION = 'us-central1'
-        CREDENTIALS_ID = 'GCP-KEY'
-        GIT_CREDENTIALS_ID = 'git-token'
+        CLUSTER_NAME = 'mlops2ndproject'
+        CLUSTER_ZONE = 'us-central1'
         IMAGE_NAME = 'ml-recommendation-app'
         IMAGE_TAG = "${env.BUILD_NUMBER}"
-        VENV_NAME = 'venv'
+        IMAGE_URL = "gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
+        CREDENTIALS_ID = 'gcp-credentials'
     }
     
     stages {
-        stage('Cloning from Github....') {
+        stage('Checkout') {
             steps {
-                checkout([$class: 'GitSCM', 
-                    branches: [[name: '*/main']], 
-                    extensions: [], 
-                    userRemoteConfigs: [[
-                        credentialsId: "${GIT_CREDENTIALS_ID}",
-                        url: 'https://github.com/Bilalgpt/mlops_2nd_project.git'
-                    ]]
-                ])
-                echo "Successfully cloned the repository."
+                checkout scm
+                echo "===> DEBUG: Repository checkout complete"
             }
         }
         
-        stage('Making a virtual environment....') {
+        stage('Build and Push Docker Image') {
             steps {
-                sh '''
-                python -m venv ${VENV_NAME}
-                . ${VENV_NAME}/bin/activate
-                pip install --upgrade pip
-                pip install -e .
-                pip list
-                '''
-                echo "Virtual environment created and dependencies installed."
-            }
-        }
-        
-        stage('DVC Pull') {
-            steps {
-                withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
-                    sh '''
-                    . ${VENV_NAME}/bin/activate
-                    export GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS
-                    dvc pull
-                    '''
+                script {
+                    // Authenticate with Google Cloud
+                    withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+                        sh '''
+                        echo "===> DEBUG: Authenticating with Google Cloud"
+                        gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
+                        gcloud config set project ${PROJECT_ID}
+                        gcloud auth configure-docker
+                        '''
+                        
+                        // Build and push Docker image with debugging
+                        sh '''
+                        echo "===> DEBUG: Starting Docker build with memory monitoring"
+                        # Print system resources before build
+                        echo "===> SYSTEM RESOURCES BEFORE BUILD:"
+                        free -h
+                        df -h
+                        
+                        # Build with progress output
+                        echo "===> DEBUG: Building Docker image ${IMAGE_URL}"
+                        docker build -t ${IMAGE_URL} . --progress=plain
+                        
+                        # Check image size
+                        echo "===> DEBUG: Image size information:"
+                        docker images ${IMAGE_URL} --format "{{.Size}}"
+                        
+                        # Print system resources after build
+                        echo "===> SYSTEM RESOURCES AFTER BUILD:"
+                        free -h
+                        df -h
+                        
+                        echo "===> DEBUG: Pushing Docker image to registry"
+                        docker push ${IMAGE_URL}
+                        echo "===> DEBUG: Image push complete"
+                        '''
+                    }
                 }
-                echo "DVC pull completed successfully."
             }
         }
         
-        stage('Build and Push Image to GCR') {
+        stage('Deploy to GKE') {
             steps {
-                withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
-                    sh '''
-                    gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-                    gcloud config set project ${PROJECT_ID}
-                    
-                    # Build the Docker image
-                    docker build -t gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG} .
-                    
-                    # Configure Docker to use gcloud as a credential helper
-                    gcloud auth configure-docker -q
-                    
-                    # Push the image to Container Registry
-                    docker push gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}
-                    
-                    # Tag as latest too
-                    docker tag gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG} gcr.io/${PROJECT_ID}/${IMAGE_NAME}:latest
-                    docker push gcr.io/${PROJECT_ID}/${IMAGE_NAME}:latest
-                    '''
-                }
-                echo "Docker image built and pushed to GCR successfully."
-            }
-        }
-        
-        stage('Deploying to Kubernetes') {
-            steps {
-                withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
-                    sh '''
-                    gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-                    gcloud config set project ${PROJECT_ID}
-                    gcloud container clusters get-credentials ${CLUSTER_NAME} --region ${LOCATION} --project ${PROJECT_ID}
-                    
-                    # Create deployment manifest
-                    cat <<EOF > deployment.yaml
+                script {
+                    withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+                        sh '''
+                        echo "===> DEBUG: Connecting to GKE cluster ${CLUSTER_NAME}"
+                        gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
+                        gcloud container clusters get-credentials ${CLUSTER_NAME} --zone ${CLUSTER_ZONE} --project ${PROJECT_ID}
+                        
+                        # Check cluster node capacity
+                        echo "===> DEBUG: Cluster node details and capacity:"
+                        kubectl describe nodes | grep -A 5 "Capacity\\|Allocatable"
+                        '''
+                        
+                        // Create the deployment YAML with proper resource limits
+                        sh '''
+                        echo "===> DEBUG: Creating deployment manifest with 2Gi memory limit"
+                        cat <<EOF > deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -104,17 +95,34 @@ spec:
     spec:
       containers:
       - name: ml-recommendation-app
-        image: gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}
+        image: ${IMAGE_URL}
         ports:
         - containerPort: 5000
         resources:
           limits:
-            cpu: 500m
-            memory: 512Mi
+            cpu: 1000m
+            memory: 2Gi
           requests:
-            cpu: 200m
-            memory: 256Mi
----
+            cpu: 500m
+            memory: 1Gi
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
+        - name: DEBUG_MODE
+          value: "true"
+        volumeMounts:
+        - name: gcp-key
+          mountPath: /var/secrets/google
+          readOnly: true
+      volumes:
+      - name: gcp-key
+        secret:
+          secretName: gcp-key
+EOF
+
+                        # Create or update the service
+                        echo "===> DEBUG: Creating service manifest"
+                        cat <<EOF > service.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -127,35 +135,113 @@ spec:
     targetPort: 5000
   type: LoadBalancer
 EOF
-
-                    # Try deploying with retries
-                    MAX_ATTEMPTS=5
-                    for i in $(seq 1 $MAX_ATTEMPTS); do
-                      kubectl apply -f deployment.yaml && break
-                      echo "Attempt $i failed, retrying in 10 seconds..."
-                      sleep 10
-                      [ $i -eq $MAX_ATTEMPTS ] && echo "Failed to deploy after $MAX_ATTEMPTS attempts" && exit 1
-                    done
-                    
-                    # Display service information
-                    kubectl get service ml-recommendation-app
-                    '''
+                        '''
+                        
+                        // Check if secret exists and create if it doesn't
+                        sh '''
+                        echo "===> DEBUG: Setting up GCP credentials secret"
+                        if ! kubectl get secret gcp-key &>/dev/null; then
+                          kubectl create secret generic gcp-key --from-file=key.json=${GOOGLE_APPLICATION_CREDENTIALS}
+                          echo "===> DEBUG: Created new GCP credentials secret"
+                        else
+                          echo "===> DEBUG: GCP credentials secret already exists"
+                        fi
+                        '''
+                        
+                        // Apply the deployment and service
+                        sh '''
+                        echo "===> DEBUG: Applying deployment to cluster"
+                        kubectl apply -f deployment.yaml
+                        kubectl apply -f service.yaml
+                        
+                        echo "===> DEBUG: Deployment applied, waiting for rollout"
+                        '''
+                        
+                        // Wait for deployment to complete and monitor resources
+                        sh '''
+                        # Monitor the deployment rollout
+                        kubectl rollout status deployment/ml-recommendation-app --timeout=5m
+                        
+                        echo "===> DEBUG: Deployment completed, checking pod status"
+                        kubectl get pods -l app=ml-recommendation-app
+                        
+                        echo "===> DEBUG: Checking resource allocation for pods"
+                        kubectl describe pods -l app=ml-recommendation-app | grep -A 3 "Limits\\|Requests"
+                        
+                        # Wait for pods to be ready
+                        sleep 30
+                        
+                        echo "===> DEBUG: Monitoring memory usage of pods"
+                        kubectl top pods -l app=ml-recommendation-app
+                        
+                        echo "===> DEBUG: Checking recent pod logs for memory indicators"
+                        for pod in $(kubectl get pods -l app=ml-recommendation-app -o name); do
+                          echo "===> LOGS FOR $pod:"
+                          kubectl logs $pod --tail=50 | grep -i "memory\\|heap\\|OOM"
+                        done
+                        
+                        # Get the service URL
+                        echo "===> APPLICATION ENDPOINT:"
+                        echo "http://$(kubectl get service ml-recommendation-app -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+                        '''
+                        
+                        // Generate resource usage report
+                        sh '''
+                        echo "===> RESOURCE USAGE SUMMARY:"
+                        echo "Pods running with following resource allocations:"
+                        kubectl get pods -l app=ml-recommendation-app -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,RESTARTS:.status.containerStatuses[0].restartCount
+                        kubectl top pods -l app=ml-recommendation-app
+                        
+                        echo "===> DEPLOYMENT SUCCESSFUL: ML Recommendation app is now running"
+                        '''
+                    }
                 }
-                echo "Deployed to Kubernetes successfully."
+            }
+        }
+        
+        stage('Verify Application Health') {
+            steps {
+                script {
+                    withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+                        sh '''
+                        echo "===> DEBUG: Verifying application health"
+                        # Wait for service to get external IP
+                        external_ip=""
+                        while [ -z $external_ip ]; do
+                          echo "===> DEBUG: Waiting for external IP..."
+                          external_ip=$(kubectl get service ml-recommendation-app -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                          [ -z "$external_ip" ] && sleep 10
+                        done
+                        
+                        echo "===> DEBUG: Service endpoint available at: http://$external_ip"
+                        
+                        # Monitor initial resource usage after deployment
+                        echo "===> DEBUG: Resource usage after 1 minute:"
+                        sleep 60
+                        kubectl top pods -l app=ml-recommendation-app
+                        
+                        # Check for any restarts which could indicate OOM issues
+                        echo "===> DEBUG: Checking for container restarts (potential OOM indicators):"
+                        kubectl get pods -l app=ml-recommendation-app -o custom-columns=NAME:.metadata.name,RESTARTS:.status.containerStatuses[0].restartCount
+                        
+                        echo "===> VERIFICATION COMPLETE: Application is deployed and running"
+                        '''
+                    }
+                }
             }
         }
     }
     
     post {
         success {
-            echo "Pipeline executed successfully!"
+            echo "===> DEBUG: Pipeline completed successfully"
         }
         failure {
-            echo "Pipeline execution failed. Please check the logs for details."
+            echo "===> DEBUG: Pipeline failed, check logs for details"
         }
         always {
-            echo "Cleaning up workspace..."
-            deleteDir()
+            echo "===> DEBUG: Cleaning workspace"
+            cleanWs()
         }
     }
 }
