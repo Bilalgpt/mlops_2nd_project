@@ -1,0 +1,15 @@
+kubernetes:latest
+docker-plugin:latest
+docker-workflow:latest
+credentials-binding:latest
+workflow-aggregator:latest
+git:latest
+pipeline-model-definition:latest
+google-oauth-plugin:latest
+google-compute-engine:latest
+google-storage-plugin:latest
+cloudbees-folder:latest
+job-dsl:latest
+configuration-as-code:latest
+blueocean:latest
+matrix-auth:latest

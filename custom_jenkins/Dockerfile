@@ -22,9 +22,16 @@ RUN apt-get update -y && \
 
 # Install Python and development tools
 RUN apt-get update -y && \
-    apt-get install -y python3 python3-pip python3-venv && \
-    pip3 install --upgrade pip setuptools wheel dvc dvc[gs] && \
+    apt-get install -y python3 python3-pip python3-venv python3-full && \
     apt-get clean
+
+# Create and use a virtual environment for Python packages
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python packages in the virtual environment
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install dvc "dvc[gs]"
 
 # Configure Docker group and permissions
 RUN groupadd -f docker && \
@@ -43,6 +50,10 @@ RUN mkdir -p /var/jenkins_home/.kube /var/jenkins_home/.config /var/jenkins_home
 # Copy entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# Copy plugins list and install Jenkins plugins
+COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
+RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 
 USER jenkins
 
