@@ -8,7 +8,7 @@ pipeline {
         IMAGE_NAME = 'ml-recommendation-app'
         IMAGE_TAG = "${env.BUILD_NUMBER}"
         IMAGE_URL = "gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
-        CREDENTIALS_ID = 'GCP-KEY'  // Updated to match your Jenkins credential ID
+        CREDENTIALS_ID = 'GCP-KEY'  // Your Jenkins credential ID
     }
     
     stages {
@@ -19,12 +19,63 @@ pipeline {
             }
         }
         
+        stage('Setup DVC and Pull Artifacts') {
+            steps {
+                script {
+                    withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+                        sh '''
+                        echo "===> DEBUG: Setting up DVC and pulling model artifacts"
+                        
+                        # Install DVC if needed
+                        pip install dvc dvc[gs] || echo "DVC already installed"
+                        
+                        # Configure DVC to use GCP credentials
+                        export GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS}
+                        
+                        # Pull model artifacts
+                        dvc pull -v
+                        
+                        # Check if artifacts were pulled successfully
+                        if [ -d "artifacts/model" ] && [ -d "artifacts/weights" ]; then
+                            echo "===> DEBUG: DVC pull successful - model artifacts retrieved"
+                            ls -la artifacts/
+                        else
+                            echo "===> WARNING: DVC pull may not have pulled all artifacts"
+                            mkdir -p artifacts/model artifacts/weights
+                        fi
+                        '''
+                    }
+                }
+            }
+        }
+        
         stage('Build and Push Docker Image') {
             steps {
                 script {
-                    // Authenticate with Google Cloud using correct credential ID
                     withCredentials([file(credentialsId: "${CREDENTIALS_ID}", variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                         sh '''
+                        echo "===> DEBUG: Creating entrypoint script"
+                        # Create entrypoint script for the Docker container
+                        cat > entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# If GCP credentials are available, use them
+if [ -n "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+  echo "Using provided GCP credentials"
+  
+  # Pull model artifacts using DVC
+  echo "Pulling model artifacts from DVC remote..."
+  dvc pull -v
+else
+  echo "Warning: No GCP credentials provided. Using the app with local artifacts if available."
+fi
+
+# Start the Flask application
+python application.py
+EOF
+                        chmod +x entrypoint.sh
+                        
                         echo "===> DEBUG: Authenticating with Google Cloud"
                         gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
                         gcloud config set project ${PROJECT_ID}
@@ -224,13 +275,21 @@ EOF
                           echo "===> DEBUG: Service endpoint available at: http://$external_ip"
                         fi
                         
-                        # Monitor initial resource usage after deployment
-                        echo "===> DEBUG: Resource usage after deployment:"
+                        # Monitor memory usage after deployment
+                        echo "===> DEBUG: Monitoring memory usage (initial):"
+                        kubectl top pods -l app=ml-recommendation-app || echo "kubectl top not available"
+                        
+                        # Sleep for a minute to let the app stabilize
+                        echo "===> DEBUG: Waiting 60 seconds for app to stabilize..."
+                        sleep 60
+                        
+                        # Check memory usage again after stabilization
+                        echo "===> DEBUG: Monitoring memory usage (after stabilization):"
                         kubectl top pods -l app=ml-recommendation-app || echo "kubectl top not available"
                         
                         # Check for any restarts which could indicate OOM issues
                         echo "===> DEBUG: Checking for container restarts (potential OOM indicators):"
-                        kubectl get pods -l app=ml-recommendation-app -o custom-columns=NAME:.metadata.name,RESTARTS:.status.containerStatuses[0].restartCount
+                        kubectl get pods -l app=ml-recommendation-app -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,RESTARTS:.status.containerStatuses[0].restartCount
                         
                         echo "===> VERIFICATION COMPLETE: Application is deployed and running"
                         '''
@@ -249,7 +308,6 @@ EOF
         }
         always {
             echo "===> DEBUG: Cleaning workspace"
-            // Use deleteDir() instead of cleanWs()
             deleteDir()
         }
     }

@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     libprotobuf-dev \
     protobuf-compiler \
     python3-dev \
+    git \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -24,11 +25,15 @@ COPY . .
 # Install dependencies from requirements.txt
 RUN pip install --no-cache-dir -e .
 
-# Train the model before running the application
-RUN python pipeline/training_pipeline.py
+# Install DVC and GS plugin for pulling model artifacts
+RUN pip install --no-cache-dir dvc dvc[gs]
 
 # Expose the port that Flask will run on
 EXPOSE 5000
 
+# Entrypoint script to pull models before starting the app
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Command to run the app
-CMD ["python", "application.py"]
+ENTRYPOINT ["/entrypoint.sh"]

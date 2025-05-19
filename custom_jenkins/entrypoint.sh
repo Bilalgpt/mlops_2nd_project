@@ -1,10 +1,16 @@
 #!/bin/bash
 set -e
 
-# Fix permissions on Docker socket if it exists
-if [ -e /var/run/docker.sock ]; then
-  sudo chmod 666 /var/run/docker.sock || echo "Could not change permissions on Docker socket"
+# If GCP credentials are available, use them
+if [ -n "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+  echo "Using provided GCP credentials"
+  
+  # Pull model artifacts using DVC
+  echo "Pulling model artifacts from DVC remote..."
+  dvc pull -v
+else
+  echo "Warning: No GCP credentials provided. Using the app with local artifacts if available."
 fi
 
-# Execute the original Jenkins entrypoint
-exec /usr/local/bin/jenkins.sh "$@"
+# Start the Flask application
+python application.py
